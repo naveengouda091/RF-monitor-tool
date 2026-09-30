@@ -1,7 +1,7 @@
 """
 Main Application Window for RF Noise Monitoring and Reduction Analysis.
 Integrates real-time PyQtGraph Spectrum and Waterfall displays, Indian/ITU-R3 Band Classification,
-Peak Transmitters Table, and Audience RF Exposure Index Gauge.
+Peak Transmitters Table, Audience RF Exposure Index Gauge, and Live Shielding Differential Analyzer.
 """
 
 import sys
@@ -27,11 +27,13 @@ from src.dsp.fft_processor import FFTProcessor
 from src.dsp.peak_detector import PeakDetector
 from src.classifier.classifier import BandClassifier
 from src.exposure.exposure_index import ExposureIndexEngine
+from src.shielding.differential_engine import ShieldingDifferentialEngine
 from src.gui.spectrum_widget import SpectrumWidget
 from src.gui.waterfall_widget import WaterfallWidget
 from src.gui.controls_panel import ControlsPanel
 from src.gui.audience_cards import AudienceExposureCard
 from src.gui.carrier_table import CarrierTableWidget
+from src.gui.shielding_panel import ShieldingPanel
 from src.gui.styles import DARK_STYLESHEET
 
 logger = logging.getLogger(__name__)
@@ -45,13 +47,14 @@ class MainWindow(QMainWindow):
         self.device = device
         self.processor = processor
 
-        # DSP Analytics & Classification Engines
+        # DSP Analytics, Classification & Shielding Engines
         self.peak_detector = PeakDetector(min_prominence_db=6.0, min_distance_bins=15, max_peaks=8)
         self.band_classifier = BandClassifier()
         self.exposure_engine = ExposureIndexEngine()
+        self.shielding_engine = ShieldingDifferentialEngine(target_baseline_frames=50)
 
         self.setWindowTitle("RF Noise Monitor & Reduction Analyzer | RTL-SDR Blog V3")
-        self.resize(1360, 860)
+        self.resize(1380, 880)
         self.setStyleSheet(DARK_STYLESHEET)
 
         # Build Worker Thread
@@ -130,7 +133,7 @@ class MainWindow(QMainWindow):
         self.audience_card.presentation_mode_toggled.connect(self._on_presentation_mode)
         main_layout.addWidget(self.audience_card)
 
-        # 3. Main Horizontal Splitter (Plots on Left, Controls & Transmitters on Right)
+        # 3. Main Horizontal Splitter (Plots on Left, Tabs on Right)
         self.h_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: Vertical Splitter for Spectrum and Waterfall
@@ -143,7 +146,7 @@ class MainWindow(QMainWindow):
         self.v_splitter.setStretchFactor(0, 3)
         self.v_splitter.setStretchFactor(1, 2)
 
-        # Right: Tabbed Sidebar (Controls & Carrier Table)
+        # Right: Tabbed Sidebar (Controls, Transmitters Table, Shielding Analysis)
         self.right_tabs = QTabWidget()
         self.right_tabs.setStyleSheet("""
             QTabWidget::pane {
@@ -154,7 +157,7 @@ class MainWindow(QMainWindow):
             QTabBar::tab {
                 background: #0b0f19;
                 color: #94a3b8;
-                padding: 6px 12px;
+                padding: 6px 10px;
                 border: 1px solid #1e293b;
                 border-bottom: none;
                 border-top-left-radius: 4px;
@@ -172,10 +175,12 @@ class MainWindow(QMainWindow):
         valid_gains = self.device.get_valid_gains()
         self.controls_panel = ControlsPanel(valid_gains=valid_gains, parent=self)
         self.carrier_table = CarrierTableWidget(parent=self)
+        self.shielding_panel = ShieldingPanel(parent=self)
 
         self.right_tabs.addTab(self.controls_panel, "Tuner & Presets")
         self.right_tabs.addTab(self.carrier_table, "Active Transmitters")
-        self.right_tabs.setFixedWidth(350)
+        self.right_tabs.addTab(self.shielding_panel, "Shielding Analysis")
+        self.right_tabs.setFixedWidth(360)
 
         self.h_splitter.addWidget(self.v_splitter)
         self.h_splitter.addWidget(self.right_tabs)
@@ -205,6 +210,11 @@ class MainWindow(QMainWindow):
         self.controls_panel.averaging_changed.connect(self._on_averaging_changed)
         self.controls_panel.pause_toggled.connect(self._on_pause_toggled)
 
+        # Shielding Panel Signals
+        self.shielding_panel.capture_baseline_requested.connect(self._on_capture_baseline_requested)
+        self.shielding_panel.clear_baseline_requested.connect(self._on_clear_baseline_requested)
+        self.shielding_panel.differential_mode_toggled.connect(self._on_diff_mode_toggled)
+
     def _on_spectrum_data(
         self,
         freq_axis_mhz,
@@ -214,7 +224,7 @@ class MainWindow(QMainWindow):
         peak_power_dbfs,
         noise_floor_dbfs,
     ):
-        """Processes analytics and updates UI components."""
+        """Processes analytics, shielding differentials, and updates UI components."""
         # 1. Detect peaks and compute occupied bandwidths
         peaks = self.peak_detector.detect(freq_axis_mhz, psd_dbfs, noise_floor_dbfs)
 
@@ -226,7 +236,28 @@ class MainWindow(QMainWindow):
         exposure = self.exposure_engine.compute(psd_dbfs, psd_dbm, peak_power_dbfs)
         max_snr = float(np.max([p.snr_db for p in peaks])) if peaks else float(peak_power_dbfs - noise_floor_dbfs)
 
-        # 4. Update Visual Displays
+        # 4. Shielding Baseline & Differential Processing
+        if self.shielding_engine.is_capturing_baseline:
+            complete, progress = self.shielding_engine.feed_baseline_frame(freq_axis_mhz, psd_dbfs)
+            self.shielding_panel.update_capture_progress(int(progress * 100))
+            if complete:
+                base_info = self.shielding_engine.get_baseline()
+                if base_info is not None:
+                    base_freqs, base_psd = base_info
+                    p0_peak = float(np.max(base_psd))
+                    self.shielding_panel.set_baseline_ready(p0_peak)
+                    self.spectrum_widget.set_baseline_curve(base_freqs, base_psd)
+                    self.status_bar.showMessage(f"Baseline P0 captured across 50 frames. Peak: {p0_peak:.1f} dBFS")
+
+        elif self.shielding_panel.diff_toggle.isChecked() and self.shielding_engine.has_baseline:
+            mat_name = self.shielding_panel.get_material_name()
+            diff = self.shielding_engine.compute_differential(freq_axis_mhz, psd_dbfs, material_name=mat_name)
+            if diff is not None:
+                delta_curve, res = diff
+                self.shielding_panel.update_shielding_result(res)
+                self.spectrum_widget.set_delta_curve(freq_axis_mhz, delta_curve)
+
+        # 5. Update Visual Displays
         self.spectrum_widget.update_spectrum(
             freq_axis_mhz,
             psd_dbfs,
@@ -239,6 +270,23 @@ class MainWindow(QMainWindow):
         self.waterfall_widget.update_waterfall(freq_axis_mhz, psd_dbfs)
         self.audience_card.update_metrics(exposure, dominant_band, len(peaks), max_snr)
         self.carrier_table.update_peaks(peaks)
+
+    def _on_capture_baseline_requested(self, num_frames: int):
+        self.shielding_engine.start_baseline_capture(num_frames)
+        self.status_bar.showMessage(f"Acquiring {num_frames} reference baseline frames...")
+
+    def _on_clear_baseline_requested(self):
+        self.shielding_engine.clear_baseline()
+        self.spectrum_widget.clear_baseline_curve()
+        self.spectrum_widget.clear_delta_curve()
+        self.status_bar.showMessage("Reference baseline cleared.")
+
+    def _on_diff_mode_toggled(self, enabled: bool):
+        if not enabled:
+            self.spectrum_widget.clear_delta_curve()
+            self.status_bar.showMessage("Shielding differential mode paused.")
+        else:
+            self.status_bar.showMessage("Live Shielding Differential Mode active. Measuring attenuation...")
 
     def _on_status_updated(self, status: dict):
         fps = status.get("fps", 0.0)

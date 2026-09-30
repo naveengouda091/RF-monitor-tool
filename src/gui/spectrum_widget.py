@@ -52,6 +52,18 @@ class SpectrumWidget(QWidget):
         )
         self.plot_widget.addItem(self.peak_scatter)
 
+        # Baseline Reference Curve (P0)
+        self.baseline_curve = self.plot_widget.plot(
+            pen=pg.mkPen(color="#f8fafc", style=Qt.PenStyle.DashLine, width=1.3),
+        )
+        self.baseline_curve.setVisible(False)
+
+        # Differential Delta Curve (P0 - P1)
+        self.delta_curve = self.plot_widget.plot(
+            pen=pg.mkPen(color="#10b981", width=1.8),
+        )
+        self.delta_curve.setVisible(False)
+
         # Crosshair cursor lines
         self.v_line = pg.InfiniteLine(
             angle=90, movable=False, pen=pg.mkPen("#64748b", style=Qt.PenStyle.DotLine)
@@ -161,3 +173,32 @@ class SpectrumWidget(QWidget):
             self.peak_scatter.setData(x=xs, y=ys)
         else:
             self.peak_scatter.setData(x=[peak_freq_mhz], y=[peak_y])
+
+    def set_baseline_curve(self, freq_axis_mhz: np.ndarray, baseline_psd_dbfs: np.ndarray):
+        """Displays the reference baseline P0 curve."""
+        dbm_offset = (
+            float(self._last_psd_dbm[0] - self._last_psd_dbfs[0])
+            if (self._last_psd_dbm is not None and self._last_psd_dbfs is not None and len(self._last_psd_dbfs) > 0)
+            else 0.0
+        )
+        y_data = baseline_psd_dbfs if self._active_unit == "dBFS" else (baseline_psd_dbfs + dbm_offset)
+        self.baseline_curve.setData(freq_axis_mhz, y_data)
+        self.baseline_curve.setVisible(True)
+
+    def clear_baseline_curve(self):
+        """Hides and clears the baseline curve."""
+        self.baseline_curve.setData([], [])
+        self.baseline_curve.setVisible(False)
+
+    def set_delta_curve(self, freq_axis_mhz: np.ndarray, delta_curve_db: np.ndarray):
+        """Displays the live differential attenuation curve (in dB)."""
+        # Render delta scaled relative to current display floor
+        floor_ref = -115.0 if self._active_unit == "dBFS" else -125.0
+        y_data = np.clip(delta_curve_db + floor_ref, floor_ref, 0.0)
+        self.delta_curve.setData(freq_axis_mhz, y_data)
+        self.delta_curve.setVisible(True)
+
+    def clear_delta_curve(self):
+        """Hides and clears the delta curve."""
+        self.delta_curve.setData([], [])
+        self.delta_curve.setVisible(False)
