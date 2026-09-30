@@ -110,6 +110,8 @@ class ControlsPanel(QWidget):
         # Default to middle-high gain
         default_idx = min(len(self.valid_gains) - 1, 15)
         self.gain_slider.setValue(default_idx)
+        initial_gain = self.valid_gains[default_idx]
+        self.gain_val_label.setText(f"Gain: {initial_gain:.1f} dB")
         self.gain_slider.valueChanged.connect(self._on_gain_slider_changed)
         gain_layout.addWidget(self.gain_slider)
 

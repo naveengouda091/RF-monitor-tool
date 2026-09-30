@@ -214,6 +214,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Ensures worker thread and hardware are released cleanly on close."""
         self.status_bar.showMessage("Stopping acquisition...")
-        self.worker.stop_acquisition()
-        self.device.disconnect()
+        stopped = self.worker.stop_acquisition(1500)
+        if not stopped:
+            logger.warning("Worker did not stop within timeout; terminating thread.")
+            self.worker.terminate()
+            self.worker.wait(500)
+        if self.device.is_connected:
+            self.device.disconnect()
         event.accept()

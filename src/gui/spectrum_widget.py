@@ -132,9 +132,19 @@ class SpectrumWidget(QWidget):
         self._last_psd_dbfs = psd_dbfs
         self._last_psd_dbm = psd_dbm
 
-        y_data = psd_dbfs if self._active_unit == "dBFS" else psd_dbm
-        noise_val = noise_floor_dbfs if self._active_unit == "dBFS" else (noise_floor_dbfs - 39.7)
-        peak_y = peak_power_dbfs if self._active_unit == "dBFS" else (peak_power_dbfs - 39.7)
+        if self._active_unit == "dBFS":
+            y_data = psd_dbfs
+            noise_val = noise_floor_dbfs
+            peak_y = peak_power_dbfs
+        else:
+            y_data = psd_dbm
+            dbm_offset = float(psd_dbm[0] - psd_dbfs[0]) if len(psd_dbfs) > 0 and len(psd_dbm) > 0 else 0.0
+            noise_val = noise_floor_dbfs + dbm_offset
+            if len(psd_dbfs) > 0 and len(psd_dbm) > 0:
+                peak_idx = int(np.argmax(psd_dbfs))
+                peak_y = float(psd_dbm[peak_idx])
+            else:
+                peak_y = peak_power_dbfs + dbm_offset
 
         # Update curve
         self.spectrum_curve.setData(freq_axis_mhz, y_data)

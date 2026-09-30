@@ -72,6 +72,12 @@ def run_phase2_verification():
         app.processEvents()
         time.sleep(0.01)
 
+    if len(received_frames) == 0:
+        print("  [FAIL] Timed out waiting for initial frame from RTL-SDR.")
+        window.close()
+        app.processEvents()
+        return False
+
     print(f"  [OK] Initial frame received. Starting steady-state streaming benchmark...")
     received_frames.clear()
 
@@ -125,9 +131,9 @@ def run_phase2_verification():
         print("=" * 65)
         return True
     else:
-        print(f"  PHASE 2 RESULT: FPS={measured_fps:.1f}, Frames={total_frames}")
+        print(f"  PHASE 2 RESULT: FAILED [FPS={measured_fps:.1f} < 15.0 or Frames={total_frames} < 30]")
         print("=" * 65)
-        return total_frames > 10
+        return False
 
 
 if __name__ == "__main__":

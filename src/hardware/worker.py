@@ -60,10 +60,10 @@ class SDRWorker(QThread):
         self._paused = False
         self.start()
 
-    def stop_acquisition(self):
-        """Signals the worker thread to stop and waits for exit."""
+    def stop_acquisition(self, timeout_ms: int = 1500) -> bool:
+        """Signals the worker thread to stop and waits for exit. Returns True if stopped."""
         self._running = False
-        self.wait(1500)
+        return self.wait(timeout_ms)
 
     def pause(self):
         """Pauses acquisition streaming."""
@@ -107,99 +107,115 @@ class SDRWorker(QThread):
 
         read_chunk_size = 32768  # ~13.6 ms of data at 2.4 MS/s
 
-        while self._running:
-            # Handle paused state
-            with QMutexLocker(self._mutex):
-                paused = self._paused
-                pending_freq = self._pending_freq
-                self._pending_freq = None
-                pending_gain = self._pending_gain
-                self._pending_gain = None
-                pending_sr = self._pending_sr
-                self._pending_sr = None
+        try:
+            while self._running:
+                # Handle paused state
+                with QMutexLocker(self._mutex):
+                    paused = self._paused
+                    pending_freq = self._pending_freq
+                    self._pending_freq = None
+                    pending_gain = self._pending_gain
+                    self._pending_gain = None
+                    pending_sr = self._pending_sr
+                    self._pending_sr = None
 
-            if paused:
-                time.sleep(0.05)
-                continue
+                if paused:
+                    time.sleep(0.05)
+                    continue
 
-            # Apply pending hardware changes
-            try:
+                # Apply pending hardware changes individually
                 if pending_freq is not None:
-                    self.device.set_center_freq(pending_freq)
-                    self.processor.reset_averaging()
+                    try:
+                        self.device.set_center_freq(pending_freq)
+                        self.processor.reset_averaging()
+                    except Exception as e:
+                        logger.error(f"Error applying frequency {pending_freq}: {e}")
+                        self.error_occurred.emit(f"Hardware tuning error: {e}")
+
                 if pending_gain is not None:
-                    self.device.set_gain(pending_gain[0], pending_gain[1])
+                    try:
+                        self.device.set_gain(pending_gain[0], pending_gain[1])
+                    except Exception as e:
+                        logger.error(f"Error applying gain {pending_gain}: {e}")
+                        self.error_occurred.emit(f"Hardware tuning error: {e}")
+
                 if pending_sr is not None:
-                    self.device.set_sample_rate(pending_sr)
-                    self.processor.reset_averaging()
-            except Exception as e:
-                logger.error(f"Error applying hardware parameters: {e}")
-                self.error_occurred.emit(f"Hardware tuning error: {e}")
+                    try:
+                        self.device.set_sample_rate(pending_sr)
+                        self.processor.reset_averaging()
+                    except Exception as e:
+                        logger.error(f"Error applying sample rate {pending_sr}: {e}")
+                        self.error_occurred.emit(f"Hardware tuning error: {e}")
 
-            loop_start = time.perf_counter()
+                loop_start = time.perf_counter()
 
-            # Acquire I/Q samples from RTL-SDR
-            try:
-                samples = self.device.read_samples(read_chunk_size)
-            except Exception as e:
-                logger.error(f"SDR read error: {e}")
-                self.error_occurred.emit(f"Device disconnected or read error: {e}")
-                break
+                # Acquire I/Q samples from RTL-SDR
+                try:
+                    samples = self.device.read_samples(read_chunk_size)
+                except Exception as e:
+                    logger.error(f"SDR read error: {e}")
+                    self.error_occurred.emit(f"Device disconnected or read error: {e}")
+                    break
 
-            if len(samples) == 0:
-                time.sleep(0.01)
-                continue
+                if len(samples) == 0:
+                    time.sleep(0.01)
+                    continue
 
-            # Process FFT
-            center_freq = self.device.get_center_freq()
-            sample_rate = self.device.get_sample_rate()
-            gain = self.device.get_gain()
+                # Process FFT
+                center_freq = self.device.get_center_freq()
+                sample_rate = self.device.get_sample_rate()
+                gain = self.device.get_gain()
 
-            freq_axis, psd_dbfs, psd_dbm, peak_power, noise_floor = self.processor.process(
-                samples=samples,
-                center_freq_hz=center_freq,
-                sample_rate_hz=sample_rate,
-                tuner_gain_db=gain,
-            )
+                freq_axis, psd_dbfs, psd_dbm, peak_power, noise_floor = self.processor.process(
+                    samples=samples,
+                    center_freq_hz=center_freq,
+                    sample_rate_hz=sample_rate,
+                    tuner_gain_db=gain,
+                )
 
-            # Strongest peak frequency
-            peak_idx = int(np.argmax(psd_dbfs))
-            peak_freq_mhz = float(freq_axis[peak_idx])
+                # Strongest peak frequency
+                peak_idx = int(np.argmax(psd_dbfs))
+                peak_freq_mhz = float(freq_axis[peak_idx])
 
-            # Emit signal to GUI
-            self.spectrum_ready.emit(
-                freq_axis,
-                psd_dbfs,
-                psd_dbm,
-                peak_freq_mhz,
-                peak_power,
-                noise_floor,
-            )
+                # Emit signal to GUI
+                self.spectrum_ready.emit(
+                    freq_axis,
+                    psd_dbfs,
+                    psd_dbm,
+                    peak_freq_mhz,
+                    peak_power,
+                    noise_floor,
+                )
 
-            # Update FPS calculation
-            self._fps_counter += 1
-            now = time.perf_counter()
-            elapsed_sec = now - self._fps_last_time
-            if elapsed_sec >= 1.0:
-                self._current_fps = self._fps_counter / elapsed_sec
-                self._fps_counter = 0
-                self._fps_last_time = now
+                # Update FPS calculation
+                self._fps_counter += 1
+                now = time.perf_counter()
+                elapsed_sec = now - self._fps_last_time
+                if elapsed_sec >= 1.0:
+                    self._current_fps = self._fps_counter / elapsed_sec
+                    self._fps_counter = 0
+                    self._fps_last_time = now
 
-                status = {
-                    "connected": True,
-                    "center_freq_mhz": center_freq / 1e6,
-                    "sample_rate_msps": sample_rate / 1e6,
-                    "gain_db": gain,
-                    "fps": round(self._current_fps, 1),
-                    "peak_power_dbfs": round(peak_power, 1),
-                    "noise_floor_dbfs": round(noise_floor, 1),
-                }
-                self.status_updated.emit(status)
+                    status = {
+                        "connected": True,
+                        "center_freq_mhz": center_freq / 1e6,
+                        "sample_rate_msps": sample_rate / 1e6,
+                        "gain_db": gain,
+                        "fps": round(self._current_fps, 1),
+                        "peak_power_dbfs": round(peak_power, 1),
+                        "noise_floor_dbfs": round(noise_floor, 1),
+                    }
+                    self.status_updated.emit(status)
 
-            # Rate-limit loop to prevent pegging 100% CPU on GUI event loop
-            process_duration = time.perf_counter() - loop_start
-            sleep_time = self.frame_interval - process_duration
-            if sleep_time > 0.001:
-                time.sleep(sleep_time)
-
-        logger.info("SDRWorker thread terminating.")
+                # Rate-limit loop to prevent pegging 100% CPU on GUI event loop
+                process_duration = time.perf_counter() - loop_start
+                sleep_time = self.frame_interval - process_duration
+                if sleep_time > 0.001:
+                    time.sleep(sleep_time)
+        finally:
+            if self.device.is_connected:
+                try:
+                    self.device.disconnect()
+                except Exception as e:
+                    logger.warning(f"Error disconnecting SDR in worker: {e}")
+            logger.info("SDRWorker thread terminating.")
