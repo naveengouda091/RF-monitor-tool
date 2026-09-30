@@ -126,11 +126,14 @@ class SpectrumWidget(QWidget):
         peak_freq_mhz: float,
         peak_power_dbfs: float,
         noise_floor_dbfs: float,
+        peaks: Optional[list] = None,
     ):
         """Updates the plot with newly processed FFT data (called by QThread signal)."""
         self._last_freqs = freq_axis_mhz
         self._last_psd_dbfs = psd_dbfs
         self._last_psd_dbm = psd_dbm
+
+        dbm_offset = float(psd_dbm[0] - psd_dbfs[0]) if len(psd_dbfs) > 0 and len(psd_dbm) > 0 else 0.0
 
         if self._active_unit == "dBFS":
             y_data = psd_dbfs
@@ -138,7 +141,6 @@ class SpectrumWidget(QWidget):
             peak_y = peak_power_dbfs
         else:
             y_data = psd_dbm
-            dbm_offset = float(psd_dbm[0] - psd_dbfs[0]) if len(psd_dbfs) > 0 and len(psd_dbm) > 0 else 0.0
             noise_val = noise_floor_dbfs + dbm_offset
             if len(psd_dbfs) > 0 and len(psd_dbm) > 0:
                 peak_idx = int(np.argmax(psd_dbfs))
@@ -152,5 +154,10 @@ class SpectrumWidget(QWidget):
         # Update noise floor line
         self.noise_floor_line.setPos(noise_val)
 
-        # Update peak marker
-        self.peak_scatter.setData(x=[peak_freq_mhz], y=[peak_y])
+        # Update peak markers (multi-peak if available)
+        if peaks:
+            xs = [p.freq_mhz for p in peaks]
+            ys = [p.power_dbfs if self._active_unit == "dBFS" else (p.power_dbfs + dbm_offset) for p in peaks]
+            self.peak_scatter.setData(x=xs, y=ys)
+        else:
+            self.peak_scatter.setData(x=[peak_freq_mhz], y=[peak_y])

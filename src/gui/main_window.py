@@ -1,10 +1,13 @@
 """
 Main Application Window for RF Noise Monitoring and Reduction Analysis.
-Integrates real-time PyQtGraph Spectrum and Waterfall displays with hardware controls.
+Integrates real-time PyQtGraph Spectrum and Waterfall displays, Indian/ITU-R3 Band Classification,
+Peak Transmitters Table, and Audience RF Exposure Index Gauge.
 """
 
 import sys
 import logging
+from typing import Optional
+import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -15,14 +18,20 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QStatusBar,
+    QTabWidget,
 )
 
 from src.hardware.sdr_device import SDRDevice
 from src.hardware.worker import SDRWorker
 from src.dsp.fft_processor import FFTProcessor
+from src.dsp.peak_detector import PeakDetector
+from src.classifier.classifier import BandClassifier
+from src.exposure.exposure_index import ExposureIndexEngine
 from src.gui.spectrum_widget import SpectrumWidget
 from src.gui.waterfall_widget import WaterfallWidget
 from src.gui.controls_panel import ControlsPanel
+from src.gui.audience_cards import AudienceExposureCard
+from src.gui.carrier_table import CarrierTableWidget
 from src.gui.styles import DARK_STYLESHEET
 
 logger = logging.getLogger(__name__)
@@ -36,8 +45,13 @@ class MainWindow(QMainWindow):
         self.device = device
         self.processor = processor
 
+        # DSP Analytics & Classification Engines
+        self.peak_detector = PeakDetector(min_prominence_db=6.0, min_distance_bins=15, max_peaks=8)
+        self.band_classifier = BandClassifier()
+        self.exposure_engine = ExposureIndexEngine()
+
         self.setWindowTitle("RF Noise Monitor & Reduction Analyzer | RTL-SDR Blog V3")
-        self.resize(1280, 800)
+        self.resize(1360, 860)
         self.setStyleSheet(DARK_STYLESHEET)
 
         # Build Worker Thread
@@ -63,7 +77,7 @@ class MainWindow(QMainWindow):
 
         # 1. Top Header Bar
         header = QHBoxLayout()
-        header.setContentsMargins(4, 2, 4, 6)
+        header.setContentsMargins(4, 2, 4, 2)
 
         title_box = QVBoxLayout()
         title = QLabel("SDR-BASED RF NOISE MONITOR & REDUCTION ANALYZER")
@@ -111,30 +125,64 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(header)
 
-        # 2. Main Horizontal Splitter (Plots on Left, Controls on Right)
-        h_splitter = QSplitter(Qt.Orientation.Horizontal)
+        # 2. Audience Exposure Metric Ribbon
+        self.audience_card = AudienceExposureCard(self)
+        self.audience_card.presentation_mode_toggled.connect(self._on_presentation_mode)
+        main_layout.addWidget(self.audience_card)
+
+        # 3. Main Horizontal Splitter (Plots on Left, Controls & Transmitters on Right)
+        self.h_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: Vertical Splitter for Spectrum and Waterfall
-        v_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.v_splitter = QSplitter(Qt.Orientation.Vertical)
         self.spectrum_widget = SpectrumWidget(self)
         self.waterfall_widget = WaterfallWidget(self)
 
-        v_splitter.addWidget(self.spectrum_widget)
-        v_splitter.addWidget(self.waterfall_widget)
-        v_splitter.setStretchFactor(0, 3)
-        v_splitter.setStretchFactor(1, 2)
+        self.v_splitter.addWidget(self.spectrum_widget)
+        self.v_splitter.addWidget(self.waterfall_widget)
+        self.v_splitter.setStretchFactor(0, 3)
+        self.v_splitter.setStretchFactor(1, 2)
 
-        # Right: Sidebar Controls Panel
+        # Right: Tabbed Sidebar (Controls & Carrier Table)
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #1e293b;
+                background-color: #131b2e;
+                border-radius: 6px;
+            }
+            QTabBar::tab {
+                background: #0b0f19;
+                color: #94a3b8;
+                padding: 6px 12px;
+                border: 1px solid #1e293b;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QTabBar::tab:selected {
+                background: #131b2e;
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+
         valid_gains = self.device.get_valid_gains()
         self.controls_panel = ControlsPanel(valid_gains=valid_gains, parent=self)
-        self.controls_panel.setFixedWidth(290)
+        self.carrier_table = CarrierTableWidget(parent=self)
 
-        h_splitter.addWidget(v_splitter)
-        h_splitter.addWidget(self.controls_panel)
-        h_splitter.setStretchFactor(0, 1)
-        h_splitter.setStretchFactor(1, 0)
+        self.right_tabs.addTab(self.controls_panel, "Tuner & Presets")
+        self.right_tabs.addTab(self.carrier_table, "Active Transmitters")
+        self.right_tabs.setFixedWidth(350)
 
-        main_layout.addWidget(h_splitter)
+        self.h_splitter.addWidget(self.v_splitter)
+        self.h_splitter.addWidget(self.right_tabs)
+        self.h_splitter.setStretchFactor(0, 1)
+        self.h_splitter.setStretchFactor(1, 0)
+
+        main_layout.addWidget(self.h_splitter)
 
         # Status Bar
         self.status_bar = QStatusBar()
@@ -166,7 +214,19 @@ class MainWindow(QMainWindow):
         peak_power_dbfs,
         noise_floor_dbfs,
     ):
-        """Dispatches fresh FFT frame to spectrum and waterfall widgets."""
+        """Processes analytics and updates UI components."""
+        # 1. Detect peaks and compute occupied bandwidths
+        peaks = self.peak_detector.detect(freq_axis_mhz, psd_dbfs, noise_floor_dbfs)
+
+        # 2. Classify peaks according to Indian/ITU-R3 regulatory allocations
+        peaks = self.band_classifier.classify_peaks(peaks)
+        dominant_band = self.band_classifier.get_dominant_band(peaks)
+
+        # 3. Compute Composite RF Exposure Index
+        exposure = self.exposure_engine.compute(psd_dbfs, psd_dbm, peak_power_dbfs)
+        max_snr = float(np.max([p.snr_db for p in peaks])) if peaks else float(peak_power_dbfs - noise_floor_dbfs)
+
+        # 4. Update Visual Displays
         self.spectrum_widget.update_spectrum(
             freq_axis_mhz,
             psd_dbfs,
@@ -174,8 +234,11 @@ class MainWindow(QMainWindow):
             peak_freq_mhz,
             peak_power_dbfs,
             noise_floor_dbfs,
+            peaks=peaks,
         )
         self.waterfall_widget.update_waterfall(freq_axis_mhz, psd_dbfs)
+        self.audience_card.update_metrics(exposure, dominant_band, len(peaks), max_snr)
+        self.carrier_table.update_peaks(peaks)
 
     def _on_status_updated(self, status: dict):
         fps = status.get("fps", 0.0)
@@ -210,6 +273,15 @@ class MainWindow(QMainWindow):
         else:
             self.worker.resume()
             self.status_bar.showMessage("Acquisition RESUMED")
+
+    def _on_presentation_mode(self, enabled: bool):
+        """Toggles presentation mode: hides secondary tabs & waterfall to maximize gauge and spectrum."""
+        self.waterfall_widget.setVisible(not enabled)
+        self.right_tabs.setVisible(not enabled)
+        if enabled:
+            self.status_bar.showMessage("PRESENTATION MODE: Maximized spectrum and exposure gauge for demonstration")
+        else:
+            self.status_bar.showMessage("Hardware streaming active | RTL-SDR Blog V3 ready")
 
     def closeEvent(self, event):
         """Ensures worker thread and hardware are released cleanly on close."""
