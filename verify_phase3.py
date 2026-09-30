@@ -9,7 +9,8 @@ import time
 import os
 import numpy as np
 
-os.environ.setdefault("QT_QPA_PLATFORM", "windows")
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_PLATFORM", "windows")
 
 from PyQt6.QtWidgets import QApplication
 

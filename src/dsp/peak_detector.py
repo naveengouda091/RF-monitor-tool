@@ -37,6 +37,40 @@ class PeakDetector:
         self.min_distance_bins = min_distance_bins
         self.max_peaks = max_peaks
 
+    @staticmethod
+    def _calculate_bandwidth_at_drop(
+        psd_dbfs: np.ndarray, peak_idx: int, db_drop: float, df_khz: float
+    ) -> float:
+        """Calculates fractional occupied bandwidth at a given dB drop from peak."""
+        p_peak = float(psd_dbfs[peak_idx])
+        target = p_peak - db_drop
+        n = len(psd_dbfs)
+
+        # Search left
+        left_idx = peak_idx
+        while left_idx > 0 and psd_dbfs[left_idx] > target:
+            left_idx -= 1
+
+        if left_idx < peak_idx and psd_dbfs[left_idx] <= target:
+            denom = float(psd_dbfs[left_idx + 1] - psd_dbfs[left_idx])
+            frac_left = left_idx + (target - float(psd_dbfs[left_idx])) / denom if abs(denom) > 1e-12 else float(left_idx)
+        else:
+            frac_left = float(left_idx)
+
+        # Search right
+        right_idx = peak_idx
+        while right_idx < n - 1 and psd_dbfs[right_idx] > target:
+            right_idx += 1
+
+        if right_idx > peak_idx and psd_dbfs[right_idx] <= target:
+            denom = float(psd_dbfs[right_idx - 1] - psd_dbfs[right_idx])
+            frac_right = right_idx - (target - float(psd_dbfs[right_idx])) / denom if abs(denom) > 1e-12 else float(right_idx)
+        else:
+            frac_right = float(right_idx)
+
+        width_bins = max(1.0, frac_right - frac_left)
+        return float(width_bins * df_khz)
+
     def detect(
         self,
         freq_axis_mhz: np.ndarray,
@@ -67,21 +101,13 @@ class PeakDetector:
         # Calculate frequency resolution per bin
         df_khz = (freq_axis_mhz[1] - freq_axis_mhz[0]) * 1000.0
 
-        # Compute 3dB and 10dB widths (in bins)
-        try:
-            widths_3db, _, _, _ = signal.peak_widths(psd_dbfs, peak_indices, rel_height=3.0)
-            widths_10db, _, _, _ = signal.peak_widths(psd_dbfs, peak_indices, rel_height=10.0)
-        except Exception:
-            widths_3db = np.ones(len(peak_indices)) * 2.0
-            widths_10db = np.ones(len(peak_indices)) * 5.0
-
         peaks: List[DetectedPeak] = []
-        for i, idx in enumerate(peak_indices):
+        for idx in peak_indices:
             p_val = float(psd_dbfs[idx])
             f_val = float(freq_axis_mhz[idx])
             snr = float(p_val - noise_floor_dbfs)
-            bw3 = float(widths_3db[i] * df_khz) if i < len(widths_3db) else 100.0
-            bw10 = float(widths_10db[i] * df_khz) if i < len(widths_10db) else 250.0
+            bw3 = self._calculate_bandwidth_at_drop(psd_dbfs, idx, 3.0, df_khz)
+            bw10 = self._calculate_bandwidth_at_drop(psd_dbfs, idx, 10.0, df_khz)
 
             peaks.append(
                 DetectedPeak(

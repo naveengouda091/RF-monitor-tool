@@ -18,6 +18,38 @@ from PyQt6.QtWidgets import (
 from src.exposure.exposure_index import ExposureMetrics
 
 
+PRESENTATION_BTN_NORMAL_STYLE = """
+    QPushButton {
+        background-color: #1e293b;
+        border: 1px solid #38bdf8;
+        border-radius: 6px;
+        color: #38bdf8;
+        font-weight: 700;
+        font-size: 11px;
+        padding: 4px 12px;
+    }
+    QPushButton:hover {
+        background-color: #0284c7;
+        color: #ffffff;
+    }
+"""
+
+PRESENTATION_BTN_ACTIVE_STYLE = """
+    QPushButton {
+        background-color: #0284c7;
+        border: 1px solid #38bdf8;
+        border-radius: 6px;
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 11px;
+        padding: 4px 12px;
+    }
+    QPushButton:hover {
+        background-color: #0369a1;
+    }
+"""
+
+
 class AudienceExposureCard(QFrame):
     """Dual-audience exposure metrics display card."""
 
@@ -120,21 +152,7 @@ class AudienceExposureCard(QFrame):
 
         self.presentation_btn = QPushButton("PRESENTATION VIEW")
         self.presentation_btn.setFixedHeight(34)
-        self.presentation_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1e293b;
-                border: 1px solid #38bdf8;
-                border-radius: 6px;
-                color: #38bdf8;
-                font-weight: 700;
-                font-size: 11px;
-                padding: 4px 12px;
-            }
-            QPushButton:hover {
-                background-color: #0284c7;
-                color: #ffffff;
-            }
-        """)
+        self.presentation_btn.setStyleSheet(PRESENTATION_BTN_NORMAL_STYLE)
         self.presentation_btn.clicked.connect(self._toggle_presentation)
         right_layout.addWidget(self.presentation_btn)
         layout.addLayout(right_layout, stretch=1)
@@ -145,10 +163,10 @@ class AudienceExposureCard(QFrame):
         self._presentation_active = not self._presentation_active
         if self._presentation_active:
             self.presentation_btn.setText("NORMAL VIEW")
-            self.presentation_btn.setStyleSheet("background-color: #0284c7; color: #ffffff; font-weight: bold;")
+            self.presentation_btn.setStyleSheet(PRESENTATION_BTN_ACTIVE_STYLE)
         else:
             self.presentation_btn.setText("PRESENTATION VIEW")
-            self.presentation_btn.setStyleSheet("")
+            self.presentation_btn.setStyleSheet(PRESENTATION_BTN_NORMAL_STYLE)
         self.presentation_mode_toggled.emit(self._presentation_active)
 
     def update_metrics(
