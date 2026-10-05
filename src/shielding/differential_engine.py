@@ -74,6 +74,9 @@ class ShieldingDifferentialEngine:
         if not self._capturing_baseline:
             return False, 0.0
 
+        if self._baseline_frames and len(psd_dbfs) != len(self._baseline_frames[0]):
+            self._baseline_frames.clear()
+
         self._baseline_frames.append(psd_dbfs.copy())
         self._baseline_freqs = freq_axis_mhz.copy()
         count = len(self._baseline_frames)

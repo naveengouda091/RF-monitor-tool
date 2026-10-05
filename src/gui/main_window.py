@@ -256,6 +256,10 @@ class MainWindow(QMainWindow):
                 delta_curve, res = diff
                 self.shielding_panel.update_shielding_result(res)
                 self.spectrum_widget.set_delta_curve(freq_axis_mhz, delta_curve)
+            else:
+                self.spectrum_widget.clear_delta_curve()
+                self.shielding_panel._on_clear_clicked()
+                self.status_bar.showMessage("Differential unavailable: please recapture baseline.")
 
         # 5. Update Visual Displays
         self.spectrum_widget.update_spectrum(
