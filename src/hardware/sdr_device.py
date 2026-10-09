@@ -104,6 +104,10 @@ class SDRDevice:
             self._center_freq_hz = float(self._sdr.center_freq)
         return self._center_freq_hz
 
+    @property
+    def center_freq(self) -> float:
+        return self.get_center_freq()
+
     def set_sample_rate(self, rate_hz: float):
         """Sets ADC sample rate in Hz."""
         self._sample_rate = rate_hz
@@ -115,6 +119,10 @@ class SDRDevice:
         if self._sdr is not None:
             self._sample_rate = float(self._sdr.sample_rate)
         return self._sample_rate
+
+    @property
+    def sample_rate(self) -> float:
+        return self.get_sample_rate()
 
     def set_gain(self, gain_db: float, auto: bool = False):
         """Sets tuner gain in dB or activates hardware AGC."""

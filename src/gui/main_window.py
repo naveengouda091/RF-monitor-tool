@@ -28,12 +28,15 @@ from src.dsp.peak_detector import PeakDetector
 from src.classifier.classifier import BandClassifier
 from src.exposure.exposure_index import ExposureIndexEngine
 from src.shielding.differential_engine import ShieldingDifferentialEngine
+from src.storage.survey_database import SurveyDatabase
+from src.storage.survey_logger import SurveyLogger
 from src.gui.spectrum_widget import SpectrumWidget
 from src.gui.waterfall_widget import WaterfallWidget
 from src.gui.controls_panel import ControlsPanel
 from src.gui.audience_cards import AudienceExposureCard
 from src.gui.carrier_table import CarrierTableWidget
 from src.gui.shielding_panel import ShieldingPanel
+from src.gui.survey_panel import SurveyPanel
 from src.gui.styles import DARK_STYLESHEET
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,11 @@ class MainWindow(QMainWindow):
         self.band_classifier = BandClassifier()
         self.exposure_engine = ExposureIndexEngine()
         self.shielding_engine = ShieldingDifferentialEngine(target_baseline_frames=50)
+
+        # Survey Data Storage & Session Logger (FR-08)
+        self.survey_db = SurveyDatabase()
+        self.survey_logger = SurveyLogger(db=self.survey_db, parent=self)
+        self._latest_spectrum_cache = None
 
         self.setWindowTitle("RF Noise Monitor & Reduction Analyzer | RTL-SDR Blog V3")
         self.resize(1380, 880)
@@ -176,10 +184,12 @@ class MainWindow(QMainWindow):
         self.controls_panel = ControlsPanel(valid_gains=valid_gains, parent=self)
         self.carrier_table = CarrierTableWidget(parent=self)
         self.shielding_panel = ShieldingPanel(parent=self)
+        self.survey_panel = SurveyPanel(logger=self.survey_logger, db=self.survey_db, parent=self)
 
         self.right_tabs.addTab(self.controls_panel, "Tuner & Presets")
         self.right_tabs.addTab(self.carrier_table, "Active Transmitters")
         self.right_tabs.addTab(self.shielding_panel, "Shielding Analysis")
+        self.right_tabs.addTab(self.survey_panel, "Survey & Logging")
         self.right_tabs.setFixedWidth(360)
 
         self.h_splitter.addWidget(self.v_splitter)
@@ -214,6 +224,10 @@ class MainWindow(QMainWindow):
         self.shielding_panel.capture_baseline_requested.connect(self._on_capture_baseline_requested)
         self.shielding_panel.clear_baseline_requested.connect(self._on_clear_baseline_requested)
         self.shielding_panel.differential_mode_toggled.connect(self._on_diff_mode_toggled)
+        self.shielding_panel.log_shielding_requested.connect(self._on_log_shielding_requested)
+
+        # Survey Panel Signals
+        self.survey_panel.snapshot_requested.connect(self._on_snapshot_requested)
 
     def _on_spectrum_data(
         self,
@@ -261,7 +275,37 @@ class MainWindow(QMainWindow):
                 self.shielding_panel._on_clear_clicked()
                 self.status_bar.showMessage("Differential unavailable: please recapture baseline.")
 
-        # 5. Update Visual Displays
+        # 5. Survey Logging (FR-08: Throttled Periodic Persistence & Cache)
+        center_mhz = float(self.device.center_freq / 1e6)
+        sample_rate_mhz = float(self.device.sample_rate / 1e6)
+
+        self._latest_spectrum_cache = {
+            "freq_axis_mhz": freq_axis_mhz,
+            "psd_dbfs": psd_dbfs,
+            "peak_freq_mhz": peak_freq_mhz,
+            "peak_power_dbfs": peak_power_dbfs,
+            "noise_floor_dbfs": noise_floor_dbfs,
+            "peaks": peaks,
+            "dominant_band": dominant_band,
+            "exposure": exposure,
+            "center_freq_mhz": center_mhz,
+            "sample_rate_msps": sample_rate_mhz,
+        }
+
+        self.survey_logger.process_frame(
+            freq_axis_mhz=freq_axis_mhz,
+            psd_dbfs=psd_dbfs,
+            peak_freq_mhz=peak_freq_mhz,
+            peak_power_dbfs=peak_power_dbfs,
+            noise_floor_dbfs=noise_floor_dbfs,
+            peaks=peaks,
+            dominant_band=dominant_band,
+            exposure=exposure,
+            center_freq_mhz=center_mhz,
+            sample_rate_msps=sample_rate_mhz,
+        )
+
+        # 6. Update Visual Displays
         self.spectrum_widget.update_spectrum(
             freq_axis_mhz,
             psd_dbfs,
@@ -274,6 +318,41 @@ class MainWindow(QMainWindow):
         self.waterfall_widget.update_waterfall(freq_axis_mhz, psd_dbfs)
         self.audience_card.update_metrics(exposure, dominant_band, len(peaks), max_snr)
         self.carrier_table.update_peaks(peaks)
+
+    def _on_snapshot_requested(self, location_id: str, notes: str):
+        """Captures immediate snapshot of current spectrum state."""
+        if self._latest_spectrum_cache is not None:
+            c = self._latest_spectrum_cache
+            rec = self.survey_logger.log_snapshot(
+                freq_axis_mhz=c["freq_axis_mhz"],
+                psd_dbfs=c["psd_dbfs"],
+                peak_freq_mhz=c["peak_freq_mhz"],
+                peak_power_dbfs=c["peak_power_dbfs"],
+                noise_floor_dbfs=c["noise_floor_dbfs"],
+                peaks=c["peaks"],
+                dominant_band=c["dominant_band"],
+                exposure=c["exposure"],
+                center_freq_mhz=c["center_freq_mhz"],
+                sample_rate_msps=c["sample_rate_msps"],
+                location_id=location_id,
+                notes=notes,
+            )
+            self.status_bar.showMessage(
+                f"Snapshot logged [{location_id}]: Peak {rec['peak_power_dbfs']:.1f} dBFS ({rec['dominant_band']})"
+            )
+        else:
+            self.status_bar.showMessage("Snapshot unavailable: waiting for live spectrum frames.")
+
+    def _on_log_shielding_requested(self, result):
+        """Persists a measured shielding attenuation result."""
+        center_mhz = float(self.device.center_freq / 1e6)
+        rec = self.survey_logger.log_shielding_result(
+            result=result,
+            center_freq_mhz=center_mhz,
+        )
+        self.status_bar.showMessage(
+            f"Shielding test logged: {rec['material_name']} (+{rec['se_peak_db']:.1f} dB SE, {rec['percentage_reduction']:.1f}% blocked)"
+        )
 
     def _on_capture_baseline_requested(self, num_frames: int):
         self.shielding_engine.start_baseline_capture(num_frames)

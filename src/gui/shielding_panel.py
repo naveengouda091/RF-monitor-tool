@@ -28,6 +28,7 @@ class ShieldingPanel(QWidget):
     clear_baseline_requested = pyqtSignal()
     differential_mode_toggled = pyqtSignal(bool)
     material_changed = pyqtSignal(str)
+    log_shielding_requested = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -147,10 +148,19 @@ class ShieldingPanel(QWidget):
         self.rating_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         res_layout.addWidget(self.rating_badge)
 
+        self.log_benchmark_btn = QPushButton("SAVE SHIELDING RECORD")
+        self.log_benchmark_btn.setProperty("class", "primary")
+        self.log_benchmark_btn.setFixedHeight(30)
+        self.log_benchmark_btn.setEnabled(False)
+        self.log_benchmark_btn.clicked.connect(self._on_log_benchmark_clicked)
+        diff_layout.addWidget(self.log_benchmark_btn)
+
         diff_layout.addWidget(self.results_card)
         layout.addWidget(diff_group)
 
         layout.addStretch()
+
+        self._latest_result = None
 
     def get_material_name(self) -> str:
         return self.mat_input.text().strip() or "Custom Material"
@@ -168,6 +178,8 @@ class ShieldingPanel(QWidget):
         self.diff_toggle.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.capture_btn.setEnabled(True)
+        self.log_benchmark_btn.setEnabled(False)
+        self._latest_result = None
         self.progress_bar.setVisible(False)
         self.base_status_label.setText("Status: Baseline cleared")
         self.pct_val_label.setText("--.- %")
@@ -178,6 +190,10 @@ class ShieldingPanel(QWidget):
         self.rating_badge.setStyleSheet(
             "background-color: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid #64748b;"
         )
+
+    def _on_log_benchmark_clicked(self):
+        if self._latest_result is not None:
+            self.log_shielding_requested.emit(self._latest_result)
 
     def update_capture_progress(self, progress_pct: int):
         self.progress_bar.setValue(progress_pct)
@@ -192,6 +208,8 @@ class ShieldingPanel(QWidget):
 
     def update_shielding_result(self, result: ShieldingResult):
         """Renders live attenuation metrics."""
+        self._latest_result = result
+        self.log_benchmark_btn.setEnabled(True)
         self.pct_val_label.setText(f"{result.percentage_reduction:.1f}% BLOCKED")
         self.pct_val_label.setStyleSheet(f"font-size: 24px; font-weight: 800; color: {result.color_hex};")
 
@@ -207,3 +225,4 @@ class ShieldingPanel(QWidget):
             f"color: {result.color_hex}; border: 1px solid {result.color_hex}; "
             f"border-radius: 4px; padding: 3px 8px; font-weight: 800; font-size: 11px;"
         )
+
