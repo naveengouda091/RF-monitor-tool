@@ -153,6 +153,8 @@ class MainWindow(QMainWindow):
         self.v_splitter.addWidget(self.waterfall_widget)
         self.v_splitter.setStretchFactor(0, 3)
         self.v_splitter.setStretchFactor(1, 2)
+        # Synchronize frequency axes between spectrum analyzer and waterfall spectrogram
+        self.waterfall_widget.plot_widget.setXLink(self.spectrum_widget.plot_widget)
 
         # Right: Tabbed Sidebar (Controls, Transmitters Table, Shielding Analysis)
         self.right_tabs = QTabWidget()

@@ -41,7 +41,7 @@ class SpectrumWidget(QWidget):
             movable=False,
             pen=pg.mkPen(color="#f59e0b", style=Qt.PenStyle.DashLine, width=1.2),
         )
-        self.plot_widget.addItem(self.noise_floor_line)
+        self.plot_widget.addItem(self.noise_floor_line, ignoreBounds=True)
 
         # Peak Marker Point
         self.peak_scatter = pg.ScatterPlotItem(
@@ -89,10 +89,31 @@ class SpectrumWidget(QWidget):
         self.unit_combo.currentIndexChanged.connect(self._on_unit_changed)
         self.unit_combo.setMaximumWidth(180)
 
+        self.reset_btn = QPushButton("Reset View")
+        self.reset_btn.setFixedHeight(24)
+        self.reset_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #38bdf8;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                color: #f8fafc;
+            }
+        """)
+        self.reset_btn.clicked.connect(self.reset_view)
+
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
         header_layout.addWidget(self.cursor_label)
-        header_layout.addSpacing(12)
+        header_layout.addSpacing(10)
+        header_layout.addWidget(self.reset_btn)
+        header_layout.addSpacing(6)
         header_layout.addWidget(self.unit_combo)
 
         # Main Layout
@@ -109,6 +130,17 @@ class SpectrumWidget(QWidget):
         self._last_freqs: Optional[np.ndarray] = None
         self._last_psd_dbfs: Optional[np.ndarray] = None
         self._last_psd_dbm: Optional[np.ndarray] = None
+        self._last_f_min: Optional[float] = None
+        self._last_f_max: Optional[float] = None
+
+    def reset_view(self):
+        """Resets both X and Y ranges to fit the current active frequency span."""
+        if self._last_f_min is not None and self._last_f_max is not None:
+            self.plot_widget.setXRange(self._last_f_min, self._last_f_max, padding=0)
+        if self._active_unit == "dBFS":
+            self.plot_widget.setYRange(-115, 5, padding=0)
+        else:
+            self.plot_widget.setYRange(-125, -5, padding=0)
 
     def _on_unit_changed(self, index: int):
         self._active_unit = "dBFS" if index == 0 else "dBm"
@@ -119,6 +151,19 @@ class SpectrumWidget(QWidget):
         else:
             self.plot_widget.setYRange(-125, -5, padding=0)
             self.spectrum_curve.setFillLevel(-125)
+
+        # Re-render immediately if we have current frame data
+        if (
+            self._last_freqs is not None
+            and self._last_psd_dbfs is not None
+            and self._last_psd_dbm is not None
+        ):
+            y_data = self._last_psd_dbfs if self._active_unit == "dBFS" else self._last_psd_dbm
+            self.spectrum_curve.setData(self._last_freqs, y_data)
+            dbm_offset = float(self._last_psd_dbm[0] - self._last_psd_dbfs[0]) if len(self._last_psd_dbfs) > 0 else 0.0
+            if hasattr(self, "_last_noise_floor"):
+                noise_val = self._last_noise_floor if self._active_unit == "dBFS" else (self._last_noise_floor + dbm_offset)
+                self.noise_floor_line.setPos(noise_val)
 
     def _on_mouse_moved(self, pos):
         """Updates crosshair lines and cursor label on mouse move."""
@@ -144,6 +189,19 @@ class SpectrumWidget(QWidget):
         self._last_freqs = freq_axis_mhz
         self._last_psd_dbfs = psd_dbfs
         self._last_psd_dbm = psd_dbm
+        self._last_noise_floor = noise_floor_dbfs
+
+        # Automatically update X view range whenever tuned center frequency or span changes
+        f_min = float(freq_axis_mhz[0])
+        f_max = float(freq_axis_mhz[-1])
+        if (
+            self._last_f_min is None
+            or abs(f_min - self._last_f_min) > 0.001
+            or abs(f_max - self._last_f_max) > 0.001
+        ):
+            self._last_f_min = f_min
+            self._last_f_max = f_max
+            self.plot_widget.setXRange(f_min, f_max, padding=0)
 
         dbm_offset = float(psd_dbm[0] - psd_dbfs[0]) if len(psd_dbfs) > 0 and len(psd_dbm) > 0 else 0.0
 
