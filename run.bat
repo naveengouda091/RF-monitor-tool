@@ -1,5 +1,6 @@
 @echo off
-title RF Noise Monitor & Reduction Analyzer - KLS VDIT
+setlocal
+title RF Noise Monitor and Reduction Analyzer - KLS VDIT
 cd /d "%~dp0"
 
 echo ======================================================================
@@ -9,7 +10,7 @@ echo ======================================================================
 echo.
 
 if exist ".venv\Scripts\python.exe" (
-    echo [INFO] Starting application using virtual environment (.venv)...
+    echo [INFO] Starting application using virtual environment: .venv
     ".venv\Scripts\python.exe" main.py
 ) else (
     echo [INFO] Starting application using system Python...
@@ -19,5 +20,10 @@ if exist ".venv\Scripts\python.exe" (
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [ERROR] Application exited with error code %ERRORLEVEL%.
-    pause
+) else (
+    echo.
+    echo [INFO] Application closed cleanly.
 )
+
+echo.
+pause
