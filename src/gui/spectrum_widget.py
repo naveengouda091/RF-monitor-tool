@@ -7,7 +7,7 @@ from typing import Optional
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton
 
 
 class SpectrumWidget(QWidget):
