@@ -140,6 +140,9 @@ class WaterfallWidget(QWidget):
             or abs(f_min - self._last_f_min) > 0.001
             or abs(f_max - self._last_f_max) > 0.001
         ):
+            # If tuning to a new frequency band, clear stale history rows
+            if self._last_f_min is not None:
+                self.waterfall_data.fill(-115.0)
             self._last_f_min = f_min
             self._last_f_max = f_max
             self.image_item.setRect(f_min, 0, f_max - f_min, self.HISTORY_ROWS)
